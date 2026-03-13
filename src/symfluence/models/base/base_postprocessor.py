@@ -208,7 +208,8 @@ class BaseModelPostProcessor(ABC, ModelComponentMixin, PathResolverMixin):  # ty
 
         basin_name = self._get_config_value(lambda: self.config.paths.river_basins_name)
         if basin_name == 'default' or basin_name is None:
-            basin_name = f"{self.domain_name}_riverBasins_{self.domain_definition_method}.shp"
+            method_suffix = self._get_method_suffix()
+            basin_name = f"{self.domain_name}_riverBasins_{method_suffix}.shp"
 
         basin_path = self._get_file_path(
             path_key='RIVER_BASINS_PATH',
@@ -218,7 +219,18 @@ class BaseModelPostProcessor(ABC, ModelComponentMixin, PathResolverMixin):  # ty
         )
 
         if not basin_path.exists():
-            raise FileNotFoundError(f"River basins shapefile not found: {basin_path}")
+            legacy_basin_name = f"{self.domain_name}_riverBasins_{self.domain_definition_method}.shp"
+            legacy_basin_path = self._get_file_path(
+                path_key='RIVER_BASINS_PATH',
+                name_key='RIVER_BASINS_NAME',
+                default_subpath='shapefiles/river_basins',
+                default_name=legacy_basin_name
+            )
+
+            if legacy_basin_path.exists():
+                basin_path = legacy_basin_path
+            else:
+                raise FileNotFoundError(f"River basins shapefile not found: {basin_path}")
 
         basin_gdf = gpd.read_file(basin_path)
 

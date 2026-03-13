@@ -380,11 +380,21 @@ class ObservationLoaderMixin:
             basin_name = self._get_config_value(
                 lambda: self.config.paths.river_basins_name, default=None)
             if basin_name == 'default' or basin_name is None:
-                definition_method = self._get_config_value(
-                    lambda: self.config.domain.definition_method, default='lumped')
-                basin_name = f"{self.domain_name}_riverBasins_{definition_method}.shp"
+                if hasattr(self, '_get_method_suffix'):
+                    method_suffix = self._get_method_suffix()
+                    basin_name = f"{self.domain_name}_riverBasins_{method_suffix}.shp"
+                else:
+                    definition_method = self._get_config_value(
+                        lambda: self.config.domain.definition_method, default='lumped')
+                    basin_name = f"{self.domain_name}_riverBasins_{definition_method}.shp"
 
             basin_path = self.project_dir / 'shapefiles' / 'river_basins' / basin_name
+
+            if not basin_path.exists() and hasattr(self, 'domain_definition_method'):
+                legacy_basin_name = f"{self.domain_name}_riverBasins_{self.domain_definition_method}.shp"
+                legacy_basin_path = self.project_dir / 'shapefiles' / 'river_basins' / legacy_basin_name
+                if legacy_basin_path.exists():
+                    basin_path = legacy_basin_path
 
             if basin_path.exists():
                 basin_gdf = gpd.read_file(basin_path)

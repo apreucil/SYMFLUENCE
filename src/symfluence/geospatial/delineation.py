@@ -412,8 +412,8 @@ class DomainDelineator(PathResolverMixin):
         """Resolve output paths for geofabric subsetting method.
 
         Determines output paths for river basins and river network shapefiles created
-        by geofabric subsetting. Includes geofabric_type in filename to distinguish
-        outputs from different geofabric sources (e.g., merit_basins vs hydrosheds).
+        by geofabric subsetting. Uses the shared method suffix resolver to keep naming
+        consistent with geofabric subset writers.
 
         Configuration Parameters:
             domain.delineation.geofabric_type: Source geofabric (merit_basins, hydrosheds, etc.)
@@ -421,18 +421,18 @@ class DomainDelineator(PathResolverMixin):
             paths.OUTPUT_RIVERS_PATH: Custom absolute path for rivers shapefile (optional)
 
             Default paths:
-                basins: shapefiles/river_basins/{domain_name}_riverBasins_subset_{geofabric_type}.shp
-                rivers: shapefiles/river_network/{domain_name}_riverNetwork_subset_{geofabric_type}.shp
+                basins: shapefiles/river_basins/{domain_name}_riverBasins_{method_suffix}.shp
+                rivers: shapefiles/river_network/{domain_name}_riverNetwork_{method_suffix}.shp
 
         Returns:
             Tuple[Path, Path]: (basins_path, rivers_path)
-                - basins_path: Subset subcatchment polygon shapefile
-                  * Format: {domain_name}_riverBasins_subset_{geofabric_type}.shp
-                  * Example: site_riverBasins_subset_merit_basins.shp
+                                - basins_path: Subset subcatchment polygon shapefile
+                                    * Format: {domain_name}_riverBasins_{method_suffix}.shp
+                                    * Example: site_riverBasins_semidistributed_subset_merit_basins.shp
 
-                - rivers_path: Subset river network polyline shapefile
-                  * Format: {domain_name}_riverNetwork_subset_{geofabric_type}.shp
-                  * Example: site_riverNetwork_subset_merit_basins.shp
+                                - rivers_path: Subset river network polyline shapefile
+                                    * Format: {domain_name}_riverNetwork_{method_suffix}.shp
+                                    * Example: site_riverNetwork_semidistributed_subset_merit_basins.shp
 
         Example:
             >>> config.domain.delineation.geofabric_type = 'merit_basins'
@@ -440,16 +440,16 @@ class DomainDelineator(PathResolverMixin):
             >>> # basins: Path('project/domain/shapefiles/river_basins/domain_riverBasins_subset_merit_basins.shp')
             >>> # rivers: Path('project/domain/shapefiles/river_network/domain_riverNetwork_subset_merit_basins.shp')
         """
-        geofabric_type = self._get_config_value(lambda: self.config.domain.delineation.geofabric_type)
+        method_suffix = self._get_method_suffix()
 
         basins_path = self._get_default_path(
             config_key="OUTPUT_BASINS_PATH",
-            default_subpath=f"shapefiles/river_basins/{self.domain_name}_riverBasins_subset_{geofabric_type}.shp"
+            default_subpath=f"shapefiles/river_basins/{self.domain_name}_riverBasins_{method_suffix}.shp"
         )
 
         rivers_path = self._get_default_path(
             config_key="OUTPUT_RIVERS_PATH",
-            default_subpath=f"shapefiles/river_network/{self.domain_name}_riverNetwork_subset_{geofabric_type}.shp"
+            default_subpath=f"shapefiles/river_network/{self.domain_name}_riverNetwork_{method_suffix}.shp"
         )
 
         return basins_path, rivers_path

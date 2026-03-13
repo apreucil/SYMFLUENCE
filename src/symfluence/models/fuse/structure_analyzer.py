@@ -279,12 +279,8 @@ class FuseStructureAnalyzer(BaseStructureEnsembleAnalyzer):
             dict_key='RIVER_BASINS_NAME'
         )
         if basin_name == 'default':
-            definition_method = self._get_config_value(
-                lambda: self.config.domain.definition_method,
-                default='lumped',
-                dict_key='DOMAIN_DEFINITION_METHOD'
-            )
-            basin_name = f"{self.domain_name}_riverBasins_{definition_method}.shp"
+            method_suffix = self._get_method_suffix()
+            basin_name = f"{self.domain_name}_riverBasins_{method_suffix}.shp"
 
         basin_path = self._get_config_value(
             lambda: self.config.paths.river_basins_path,
@@ -295,6 +291,17 @@ class FuseStructureAnalyzer(BaseStructureEnsembleAnalyzer):
             basin_path = self.project_dir / 'shapefiles' / 'river_basins' / basin_name
         else:
             basin_path = Path(basin_path)
+
+        if not basin_path.exists():
+            definition_method = self._get_config_value(
+                lambda: self.config.domain.definition_method,
+                default='lumped',
+                dict_key='DOMAIN_DEFINITION_METHOD'
+            )
+            legacy_basin_name = f"{self.domain_name}_riverBasins_{definition_method}.shp"
+            legacy_basin_path = self.project_dir / 'shapefiles' / 'river_basins' / legacy_basin_name
+            if legacy_basin_path.exists():
+                basin_path = legacy_basin_path
 
         if basin_path.exists():
             try:
