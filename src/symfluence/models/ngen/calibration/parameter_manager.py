@@ -226,7 +226,7 @@ class NgenParameterManager(BaseParameterManager):
         modules_str = self._get_config_value(lambda: self.config.model.ngen.modules_to_calibrate, default='CFE', dict_key='NGEN_MODULES_TO_CALIBRATE')
         if modules_str is None:
             modules_str = 'CFE'
-        modules = [m.strip().upper() for m in modules_str.split(',') if m.strip()]
+        modules = [self._normalize_module_name(m) for m in modules_str.split(',') if m.strip()]
 
         # Validate modules (filter invalid ones without mutating during iteration)
         valid_modules = ['CFE', 'NOAH', 'PET', 'TOPMODEL', 'SACSMA', 'SNOW17']
@@ -238,6 +238,21 @@ class NgenParameterManager(BaseParameterManager):
                 self.logger.warning(f"Unknown module '{module}', skipping")
 
         return validated if validated else ['CFE']  # Default to CFE
+
+    @staticmethod
+    def _normalize_module_name(module_name: str) -> str:
+        token = module_name.strip().upper().replace('-', '').replace('_', '').replace(' ', '')
+        aliases = {
+            'NOAHOWP': 'NOAH',
+            'NOAH': 'NOAH',
+            'SLOTH': 'SLOTH',
+            'PET': 'PET',
+            'CFE': 'CFE',
+            'TOPMODEL': 'TOPMODEL',
+            'SACSMA': 'SACSMA',
+            'SNOW17': 'SNOW17',
+        }
+        return aliases.get(token, token)
 
     def _parse_parameters_to_calibrate(self) -> Dict[str, List[str]]:
         """Parse parameters to calibrate for each module"""

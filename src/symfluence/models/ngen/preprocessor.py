@@ -44,6 +44,22 @@ class NgenPreProcessor(BaseModelPreProcessor):  # type: ignore[misc]
 
 
     MODEL_NAME = "NGEN"
+
+    @staticmethod
+    def _normalize_module_name(module_name: str) -> str:
+        token = module_name.strip().upper().replace('-', '').replace('_', '').replace(' ', '')
+        aliases = {
+            'NOAHOWP': 'NOAH',
+            'NOAH': 'NOAH',
+            'SLOTH': 'SLOTH',
+            'PET': 'PET',
+            'CFE': 'CFE',
+            'TOPMODEL': 'TOPMODEL',
+            'SACSMA': 'SACSMA',
+            'SNOW17': 'SNOW17',
+        }
+        return aliases.get(token, token)
+
     def __init__(self, config: Dict[str, Any], logger: logging.Logger):
         """
         Initialize the NextGen preprocessor.
@@ -88,7 +104,11 @@ class NgenPreProcessor(BaseModelPreProcessor):  # type: ignore[misc]
             lambda: self.config.model.ngen.modules_selected,
             default='SLOTH,PET,CFE',
         )
-        _selected = {m.strip().upper() for m in modules_selected_str.split(',') if m.strip()}
+        _selected = {
+            self._normalize_module_name(m)
+            for m in modules_selected_str.split(',')
+            if m.strip()
+        }
 
         _all_modules = ['SLOTH', 'PET', 'NOAH', 'CFE', 'TOPMODEL', 'SACSMA', 'SNOW17']
         _resolved = {}
