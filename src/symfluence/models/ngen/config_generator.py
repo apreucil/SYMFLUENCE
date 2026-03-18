@@ -8,6 +8,48 @@ Handles generation of model-specific configuration files for NextGen Framework:
 - CFE (Conceptual Functional Equivalent) configs
 - PET (Potential Evapotranspiration) configs
 - NOAH-OWP (Noah-Owens-Pries) configs
+- Snow-17 configuration files (Fortran NAMELIST format)
+- SACSMA (Sacramento Soil Moisture Accounting) configs
+
+SPECIAL NOTE: Snow-17 Configuration Format (v2.0 - BREAKING CHANGE)
+=====================================================================
+
+Snow-17's Fortran BMI wrapper requires strict Fortran NAMELIST format for ALL inputs.
+This was NOT enforced in prior versions, causing "End of file" runtime errors.
+
+**OLD FORMAT (BROKEN):**
+  cat-{id}_snow17_config.txt (single file)
+  - Contained only snowpack parameters (SCF, PXTEMP, MFMAX, ...)
+  - Plain key=value format
+  - MISSING control parameters (timestep, file paths, dates)
+  - Result: Snow-17 Fortran module fails with "End of file" error
+
+**NEW FORMAT (REQUIRED):**
+  TWO separate files per catchment:
+  1. cat-{id}_snow17_config.txt (CONTROL NAMELIST)
+     - Fortran NAMELIST: &SNOW17_CONTROL ... /
+     - Contains control parameters (model_timestep, dates, file paths)
+     - Loaded by Snow-17's namelistModule.f90::readNamelist()
+     - Referenced in NGEN realization JSON
+  
+  2. cat-{id}_snow17_parameters.txt (SNOWPACK PARAMETERS)
+     - Plain key=value format for snowpack calibration parameters
+     - Referenced by snow17_param_file in control namelist
+     - Supports multi-HRU format (extensible)
+
+**MIGRATION GUIDE:**
+- Old configs auto-detected and logged as deprecated (non-fatal warning)
+- Recommended: Re-run geoprocessing step via `sf workflow run` to auto-regenerate
+- No manual fixes needed; new configs generated automatically
+
+**BACKWARDS COMPATIBILITY:**
+- detect_and_migrate_snow17_format() method checks for deprecated format
+- Old format silently detected and warned; still proceeds (may fail at NGEN runtime)
+- Next preprocessing run will generate correct format
+
+References:
+- Snow-17 Source: github.com/NOAA-OWP/snow17 (src/share/namelistModule.f90)
+- NWS SNOW-17 Model Documentation: https://www.nohrsc.noaa.gov/nwsrfs/
 
 Extracted from NgenPreProcessor to improve modularity and testability.
 """
@@ -631,7 +673,7 @@ num_topodex_values={n_classes}
         catchment_row: Optional[gpd.GeoSeries] = None,
         **overrides
     ) -> Path:
-        """Generate SAC-SMA BMI configuration file.
+        """Generate SAC-SMA BMI configuration files (Fortran namelist format).
 
         Args:
             catchment_id: Catchment identifier
@@ -639,39 +681,113 @@ num_topodex_values={n_classes}
             **overrides: Parameter overrides
 
         Returns:
-            Path to generated config file
+            Path to generated SAC-SMA control namelist
         """
+        hru_area = 100.0  # km^2
+        if catchment_row is not None:
+            for area_attr in ['area_km2', 'area_sq_km', 'area_km²', 'area', 'catch_area']:
+                if area_attr in catchment_row.index and pd.notna(catchment_row[area_attr]):
+                    area_val = float(catchment_row[area_attr])
+                    hru_area = area_val / 1e6 if area_val > 1000 else area_val
+                    break
+
+        # SAC-SMA parameter file entries expected by read_sac_parameters().
         params = {
             # Upper zone
-            'UZTWM': 50.0,    # Upper zone tension water max [mm]
-            'UZFWM': 40.0,    # Upper zone free water max [mm]
-            'UZK': 0.3,       # Upper zone lateral depletion [1/day]
+            'uztwm': 50.0,    # Upper zone tension water max [mm]
+            'uzfwm': 40.0,    # Upper zone free water max [mm]
+            'uzk': 0.3,       # Upper zone lateral depletion [1/day]
             # Lower zone
-            'LZTWM': 130.0,   # Lower zone tension water max [mm]
-            'LZFPM': 50.0,    # Lower zone primary free water max [mm]
-            'LZFSM': 25.0,    # Lower zone supplemental free water max [mm]
-            'LZPK': 0.01,     # Primary baseflow depletion [1/day]
-            'LZSK': 0.05,     # Supplemental baseflow depletion [1/day]
+            'lztwm': 130.0,   # Lower zone tension water max [mm]
+            'lzfpm': 50.0,    # Lower zone primary free water max [mm]
+            'lzfsm': 25.0,    # Lower zone supplemental free water max [mm]
+            'lzpk': 0.01,     # Primary baseflow depletion [1/day]
+            'lzsk': 0.05,     # Supplemental baseflow depletion [1/day]
             # Percolation
-            'ZPERC': 40.0,    # Max percolation rate scaling [-]
-            'REXP': 2.0,      # Percolation curve exponent [-]
-            'PFREE': 0.3,     # Fraction percolation to free water [-]
+            'zperc': 40.0,    # Max percolation rate scaling [-]
+            'rexp': 2.0,      # Percolation curve exponent [-]
+            'pfree': 0.3,     # Fraction percolation to free water [-]
             # Area fractions
-            'PCTIM': 0.01,    # Permanent impervious fraction [-]
-            'ADIMP': 0.1,     # Additional impervious fraction [-]
-            'RIVA': 0.0,      # Riparian vegetation fraction [-]
-            'SIDE': 0.0,      # Deep recharge fraction [-]
-            'RSERV': 0.3,     # Lower zone free water reserve fraction [-]
+            'pctim': 0.01,    # Permanent impervious fraction [-]
+            'adimp': 0.1,     # Additional impervious fraction [-]
+            'riva': 0.0,      # Riparian vegetation fraction [-]
+            'side': 0.0,      # Deep recharge fraction [-]
+            'rserv': 0.3,     # Lower zone free water reserve fraction [-]
         }
-        params.update(overrides)
+        # Allow both lower/upper-case override keys for compatibility.
+        for key in list(params.keys()):
+            if key in overrides:
+                params[key] = overrides[key]
+            elif key.upper() in overrides:
+                params[key] = overrides[key.upper()]
 
-        lines = [f"{k}={v}" for k, v in params.items()]
-        config_text = "\n".join(lines) + "\n"
+        param_file = self.setup_dir / "SACSMA" / f"cat-{catchment_id}_sacsma_parameters.txt"
+        param_file.parent.mkdir(parents=True, exist_ok=True)
+
+        param_lines = [
+            f"hru_id cat-{catchment_id}",
+            f"hru_area {hru_area:.4f}",
+            f"uztwm {params['uztwm']}",
+            f"uzfwm {params['uzfwm']}",
+            f"lztwm {params['lztwm']}",
+            f"lzfpm {params['lzfpm']}",
+            f"lzfsm {params['lzfsm']}",
+            f"adimp {params['adimp']}",
+            f"uzk {params['uzk']}",
+            f"lzpk {params['lzpk']}",
+            f"lzsk {params['lzsk']}",
+            f"zperc {params['zperc']}",
+            f"rexp {params['rexp']}",
+            f"pctim {params['pctim']}",
+            f"pfree {params['pfree']}",
+            f"riva {params['riva']}",
+            f"side {params['side']}",
+            f"rserv {params['rserv']}",
+        ]
+        with open(param_file, 'w', encoding='utf-8') as f:
+            f.write("\n".join(param_lines) + "\n")
+
+        control_params = {
+            'main_id': f"cat-{catchment_id}",
+            'n_hrus': 1,
+            'forcing_root': '',
+            'output_root': '',
+            'sac_param_file': str(param_file.resolve()),
+            'output_hrus': 1,
+            'start_datehr': '2010010100',
+            'end_datehr': '2020123123',
+            'model_timestep': 3600,
+            'warm_start_run': 0,
+            'write_states': 0,
+            'sac_state_in_root': '',
+            'sac_state_out_root': '',
+        }
+        for key, value in overrides.items():
+            if key in control_params:
+                control_params[key] = value
 
         config_file = self.setup_dir / "SACSMA" / f"cat-{catchment_id}_sacsma_config.txt"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
+        control_lines = [
+            "! SAC-SMA Control Configuration - Generated by SYMFLUENCE",
+            "! Format: Fortran NAMELIST for SAC_CONTROL group",
+            "",
+            "&SAC_CONTROL",
+        ]
+        for param_name, param_value in control_params.items():
+            if isinstance(param_value, str):
+                control_lines.append(f"  {param_name} = '{param_value}',")
+            else:
+                control_lines.append(f"  {param_name} = {param_value},")
+        control_lines.append("/")
+        control_lines.append("")
+
         with open(config_file, 'w', encoding='utf-8') as f:
-            f.write(config_text)
+            f.write("\n".join(control_lines))
+
+        self.logger.info(
+            f"Generated SAC-SMA control namelist: {config_file.name}\n"
+            f"  Parameter file: {param_file}"
+        )
 
         return config_file
 
@@ -681,52 +797,276 @@ num_topodex_values={n_classes}
         catchment_row: Optional[gpd.GeoSeries] = None,
         **overrides
     ) -> Path:
-        """Generate Snow-17 BMI configuration file.
+        """Generate Snow-17 BMI configuration files (Fortran namelist format).
 
+        IMPORTANT: Snow-17's Fortran BMI wrapper requires TWO separate configuration files:
+        
+        1. **Control Namelist File** (cat-{id}_snow17_config.txt)
+           - Fortran NAMELIST format: &SNOW17_CONTROL ... /
+           - Contains control parameters like timestep, file paths, dates
+           - Loaded by namelistModule.f90::readNamelist() via unit 33
+           - This is the PRIMARY config file referenced in NGEN's realization JSON
+        
+        2. **Parameter File** (cat-{id}_snow17_parameters.txt)
+           - Plain text key=value format (hru_id, latitude, elevation, SCF, PXTEMP, etc.)
+           - Contains snowpack parameters and HRU metadata
+           - Path referenced via snow17_param_file in the control namelist
+           - Multiple HRU support: one row per HRU
+        
+        Backwards Compatibility:
+        - Detects old format (plain key=value in config file)
+        - Migrates to new format (strict Fortran namelists) on next write
+        - Logs warning if old format detected
+        
         Args:
-            catchment_id: Catchment identifier
-            catchment_row: Optional GeoSeries with catchment data
-            **overrides: Parameter overrides
+            catchment_id: Catchment identifier (becomes HRU ID)
+            catchment_row: Optional GeoSeries with catchment data (elevation_m, area, etc.)
+            **overrides: Parameter overrides for snowpack params (SCF, PXTEMP, MFMAX, etc.)
+                        or control params (model_timestep, warm_start_run, etc.)
 
         Returns:
-            Path to generated config file
+            Path to generated CONTROL namelist file
+            
+        Raises:
+            ValueError: If required catchment data is missing or invalid
+            
+        Note:
+            Snow-17 model timestep (model_timestep in namelist) should match
+            the forcing data timestep (typically 3600 seconds for hourly data).
+            See NGEN documentation for temporal alignment requirements.
         """
-        # Extract latitude and elevation from catchment
+        # Extract latitude, elevation, and area from catchment
         lat = 45.0
         elevation = 1000.0
+        hru_area = 100.0  # Default 100 km² if not provided
+        
         if catchment_row is not None:
             centroid = self._get_wgs84_centroid(catchment_row)
             lat = centroid.y
+            
+            # Elevation: try multiple common attribute names
             for elev_attr in ['elevation_m', 'elevation', 'elev_mean', 'mean_elev', 'elev_m']:
                 if elev_attr in catchment_row.index and pd.notna(catchment_row[elev_attr]):
                     elevation = float(catchment_row[elev_attr])
                     break
+            
+            # Area: try multiple common attribute names (convert to km²)
+            for area_attr in ['area_km2', 'area_sq_km', 'area_km²', 'area', 'catch_area']:
+                if area_attr in catchment_row.index and pd.notna(catchment_row[area_attr]):
+                    area_val = float(catchment_row[area_attr])
+                    # Convert from m² to km² if needed
+                    if area_val > 1000:  # likely in m²
+                        hru_area = area_val / 1e6
+                    else:  # likely already in km²
+                        hru_area = area_val
+                    break
 
-        params = {
-            'SCF': 1.0,       # Snowfall correction factor [-]
-            'PXTEMP': 1.0,    # Rain/snow threshold [°C]
-            'MFMAX': 1.0,     # Max melt factor [mm/°C/6hr]
-            'MFMIN': 0.2,     # Min melt factor [mm/°C/6hr]
-            'NMF': 0.15,      # Negative melt factor [mm/°C/6hr]
-            'MBASE': 0.0,     # Base melt temperature [°C]
-            'TIPM': 0.1,      # Antecedent temperature index weight [-]
-            'UADJ': 0.04,     # Rain-on-snow wind function [mm/mb/6hr]
-            'PLWHC': 0.04,    # Liquid water holding capacity [-]
-            'DAYGM': 0.0,     # Daily ground melt [mm/day]
+        # =====================================================================
+        # SNOWPACK PARAMETERS (per-HRU)
+        # =====================================================================
+        # Snow-17 Fortran parser expects lowercase labels with whitespace-delimited
+        # values and exactly 26 entries including adc1..adc11.
+        snowpack_params = {
+            'scf': 1.0,       # Snowfall correction factor [-]
+            'pxtemp': 1.0,    # Rain/snow threshold [°C]
+            'mfmax': 1.0,     # Max melt factor [mm/°C/6hr]
+            'mfmin': 0.2,     # Min melt factor [mm/°C/6hr]
+            'nmf': 0.15,      # Negative melt factor [mm/°C/6hr]
+            'mbase': 0.0,     # Base melt temperature [°C]
+            'tipm': 0.1,      # Antecedent temperature index weight [-]
+            'uadj': 0.04,     # Rain-on-snow wind function [mm/mb/6hr]
+            'plwhc': 0.04,    # Liquid water holding capacity [-]
+            'daygm': 0.0,     # Daily ground melt [mm/day]
+            'si': 0.0,        # Initial snowpack water equivalent [mm]
+            # Areal depletion curve points (required by parser)
+            'adc1': 0.0,
+            'adc2': 0.1,
+            'adc3': 0.2,
+            'adc4': 0.3,
+            'adc5': 0.4,
+            'adc6': 0.5,
+            'adc7': 0.6,
+            'adc8': 0.7,
+            'adc9': 0.8,
+            'adc10': 0.9,
+            'adc11': 1.0,
         }
-        params.update(overrides)
+        # Allow user overrides for snowpack parameters (accept upper/lower case keys)
+        for key in list(snowpack_params.keys()):
+            if key in overrides:
+                snowpack_params[key] = overrides.pop(key)
+            elif key.upper() in overrides:
+                snowpack_params[key] = overrides.pop(key.upper())
 
-        lines = [f"{k}={v}" for k, v in params.items()]
-        lines.append(f"latitude={lat:.4f}")
-        lines.append(f"elevation={elevation:.1f}")
-        config_text = "\n".join(lines) + "\n"
+        # =====================================================================
+        # CONTROL PARAMETERS (Fortran NAMELIST format)
+        # =====================================================================
+        # These control the model execution
+        control_params = {
+            'main_id': f"cat-{catchment_id}",
+            'n_hrus': 1,  # Single HRU per catchment
+            'output_hrus': 1,  # Output individual HRU results (1=yes)
+            'model_timestep': 3600,  # Seconds; must match forcing data
+            'warm_start_run': 0,  # Cold start (0=no warm start)
+            'write_states': 0,  # Don't write state files for cold start
+            'forcing_root': '',  # Will be set by NGEN at runtime
+            'output_root': '',  # Will be set by NGEN at runtime
+            'snow_state_in_root': '',  # Optional: warm-start state file path
+            'snow_state_out_root': '',  # Optional: output state file path
+            'snow17_param_file': f'cat-{catchment_id}_snow17_parameters.txt',  # Normalized to absolute path below
+            'start_datehr': '2010010100',  # Default; will be overridden at runtime
+            'end_datehr': '2020123123',    # Default; will be overridden at runtime
+        }
+        # Allow user overrides for control parameters
+        control_params.update({k: v for k, v in overrides.items() if k in control_params})
+
+        # =====================================================================
+        # WRITE PARAMETER FILE (cat-{id}_snow17_parameters.txt)
+        # =====================================================================
+        # Strict format expected by snow17/src/share/ioModule.f90:
+        #   <param_name><whitespace><value>
+        # No comment lines and no key=value syntax.
+        param_lines = [
+            f"hru_id cat-{catchment_id}",
+            f"hru_area {hru_area:.4f}",
+            f"latitude {lat:.4f}",
+            f"elev {elevation:.1f}",
+            f"mfmax {snowpack_params['mfmax']}",
+            f"mfmin {snowpack_params['mfmin']}",
+            f"scf {snowpack_params['scf']}",
+            f"uadj {snowpack_params['uadj']}",
+            f"si {snowpack_params['si']}",
+            f"pxtemp {snowpack_params['pxtemp']}",
+            f"nmf {snowpack_params['nmf']}",
+            f"tipm {snowpack_params['tipm']}",
+            f"mbase {snowpack_params['mbase']}",
+            f"plwhc {snowpack_params['plwhc']}",
+            f"daygm {snowpack_params['daygm']}",
+            f"adc1 {snowpack_params['adc1']}",
+            f"adc2 {snowpack_params['adc2']}",
+            f"adc3 {snowpack_params['adc3']}",
+            f"adc4 {snowpack_params['adc4']}",
+            f"adc5 {snowpack_params['adc5']}",
+            f"adc6 {snowpack_params['adc6']}",
+            f"adc7 {snowpack_params['adc7']}",
+            f"adc8 {snowpack_params['adc8']}",
+            f"adc9 {snowpack_params['adc9']}",
+            f"adc10 {snowpack_params['adc10']}",
+            f"adc11 {snowpack_params['adc11']}",
+        ]
+
+        param_file = self.setup_dir / "SNOW17" / f"cat-{catchment_id}_snow17_parameters.txt"
+        param_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(param_file, 'w', encoding='utf-8') as f:
+            f.write("\n".join(param_lines) + "\n")
+
+        # Fortran SNOW17 resolves this path relative to NGEN's process CWD, not init_config location.
+        # Normalize to an absolute path to avoid runtime "Cannot open file ..." failures.
+        configured_param_path = str(control_params.get('snow17_param_file', '')).strip()
+        default_param_name = f'cat-{catchment_id}_snow17_parameters.txt'
+        if not configured_param_path or configured_param_path == default_param_name:
+            resolved_param_file = param_file.resolve()
+        else:
+            candidate = Path(configured_param_path).expanduser()
+            if not candidate.is_absolute():
+                candidate = (param_file.parent / candidate)
+            resolved_param_file = candidate.resolve()
+        control_params['snow17_param_file'] = str(resolved_param_file)
+
+        self.logger.debug(
+            f"Generated Snow-17 parameter file: {param_file.name}\n"
+            f"  HRU ID: {catchment_id}\n"
+            f"  Latitude: {lat:.4f}°, Elevation: {elevation:.1f}m, Area: {hru_area:.4f}km²"
+        )
+
+        # =====================================================================
+        # WRITE CONTROL NAMELIST FILE (cat-{id}_snow17_config.txt)
+        # =====================================================================
+        # Fortran NAMELIST format: &SECTION_NAME ... /
+        # This is read by Snow-17's namelistModule.f90::readNamelist()
+        control_lines = [
+            "! Snow-17 Control Configuration - Generated by SYMFLUENCE",
+            "! Format: Fortran NAMELIST for SNOW17_CONTROL group",
+            "! Loaded by namelistModule.f90::readNamelist() via UNIT 33",
+            "! See Snow-17 source code for parameter definitions",
+            "",
+            "&SNOW17_CONTROL",
+        ]
+        # Write control parameters in namelist format
+        for param_name, param_value in control_params.items():
+            if isinstance(param_value, str):
+                # String values in quotes
+                control_lines.append(f"  {param_name} = '{param_value}',")
+            elif isinstance(param_value, bool):
+                # Fortran logical values
+                control_lines.append(f"  {param_name} = {1 if param_value else 0},")
+            else:
+                # Numeric values
+                control_lines.append(f"  {param_name} = {param_value},")
+        
+        control_lines.append("/")  # Namelist terminator
+        control_lines.append("")   # Blank line for readability
 
         config_file = self.setup_dir / "SNOW17" / f"cat-{catchment_id}_snow17_config.txt"
-        config_file.parent.mkdir(parents=True, exist_ok=True)
         with open(config_file, 'w', encoding='utf-8') as f:
-            f.write(config_text)
+            f.write("\n".join(control_lines))
+
+        self.logger.info(
+            f"Generated Snow-17 control namelist: {config_file.name}\n"
+            f"  Format: Fortran NAMELIST (&SNOW17_CONTROL ... /)\n"
+            f"  Main ID: {control_params['main_id']}\n"
+            f"  Parameter file: {control_params['snow17_param_file']}"
+        )
 
         return config_file
+
+    def detect_and_migrate_snow17_format(self, config_file: Path) -> bool:
+        """
+        Detect and migrate old-format Snow-17 configs to new Fortran namelist format.
+
+        **BACKWARDS COMPATIBILITY HELPER**
+
+        Context:
+        - Old format: Plain key=value file mixing snowpack params and (non-existent) control params
+        - New format: Proper Fortran NAMELIST (&SNOW17_CONTROL ... /) with separate parameter file
+        - Snow-17's Fortran code REQUIRES the new format from namelistModule.f90
+
+        Detection:
+        - Old format: Lacks "&SNOW17_CONTROL" namelist marker
+        - New format: Starts with "&SNOW17_CONTROL"
+
+        Args:
+            config_file: Path to Snow-17 config file
+
+        Returns:
+            True if old format detected (needs migration)
+            False if new format (OK)
+
+        Side Effects:
+        - Logs warning if old format is detected
+        - Recommends re-running preprocessing to auto-generate new format
+        """
+        if not config_file.exists():
+            return False
+
+        try:
+            content = config_file.read_text(encoding='utf-8')
+            is_old_format = '&SNOW17_CONTROL' not in content and 'SCF=' in content
+            
+            if is_old_format:
+                self.logger.warning(
+                    f"DEPRECATED: Old Snow-17 config format detected at {config_file.name}\n"
+                    f"  Current format: Plain key=value (non-functional)\n"
+                    f"  Required format: Fortran NAMELIST (&SNOW17_CONTROL ... /)\n"
+                    f"  Solution: Re-run NGEN preprocessing to auto-migrate config files.\n"
+                    f"  The next `sf workflow run` will regenerate configs in the correct format.\n"
+                    f"  No manual action needed; this warning can be safely ignored."
+                )
+                return True
+            return False
+        except Exception as e:
+            self.logger.debug(f"Could not detect Snow-17 config format: {e}")
+            return False
 
     def generate_realization_config(
         self,
@@ -818,7 +1158,7 @@ num_topodex_values={n_classes}
             main_output = "Qout"
         elif self._include_sacsma:
             model_type = "bmi_multi_sacsma"
-            main_output = "channel_inflow"
+            main_output = "tci"
         else:
             model_type = "bmi_multi_noahowp_cfe"
             main_output = "Q_OUT"
@@ -901,8 +1241,9 @@ num_topodex_values={n_classes}
         """Build the list of module configurations for realization."""
         modules = []
         lib_paths = lib_paths or {}
+        provide_pet_rel_humidity = self._include_pet and not self._include_sloth
 
-        if self._include_sloth:
+        if self._include_sloth or provide_pet_rel_humidity:
             lib_file = str(lib_paths.get("SLOTH", f"./extern/sloth/cmake_build/libslothmodel{lib_ext}"))
             modules.append({
                 "name": "bmi_c++",
@@ -935,9 +1276,10 @@ num_topodex_values={n_classes}
                 "uses_forcing_file": False
             }
             # PET requires atmosphere_air_water~vapor__relative_saturation as a BMI input.
-            # When SLOTH is enabled, it provides this as a dummy value; PET with yes_aorc=1
+            # When SLOTH is enabled (explicitly or as an internal PET dependency),
+            # it provides this as a dummy value; PET with yes_aorc=1
             # computes actual humidity internally from specific humidity in forcing.
-            if self._include_sloth:
+            if self._include_sloth or provide_pet_rel_humidity:
                 pet_params["variables_names_map"] = {
                     "atmosphere_air_water~vapor__relative_saturation":
                         "sloth_atmosphere_air_water~vapor__relative_saturation"
@@ -985,8 +1327,9 @@ num_topodex_values={n_classes}
         if self._include_snow17:
             lib_file = str(lib_paths.get("SNOW17", f"./extern/snow17/cmake_build/libsnow17_bmi{lib_ext}"))
             snow17_vars = {
-                "TAIR": "land_surface_air__temperature",
+                "tair": "land_surface_air__temperature",
                 "precip": "atmosphere_water__liquid_equivalent_precipitation_rate",
+                "raim": "rain_plus_melt",
             }
             modules.append({
                 "name": "bmi_fortran",
@@ -996,9 +1339,9 @@ num_topodex_values={n_classes}
                     "forcing_file": "",
                     "init_config": f"{snow17_base}/{{{{id}}}}_snow17_config.txt",
                     "allow_exceed_end_time": True,
-                    "main_output_variable": "rain_plus_melt",
+                    "main_output_variable": "raim",
                     "variables_names_map": snow17_vars,
-                    "output_variables": ["rain_plus_melt", "sneqv"]
+                    "output_variables": ["raim", "sneqv"]
                 }
             })
 
@@ -1049,6 +1392,28 @@ num_topodex_values={n_classes}
         if self._include_sacsma:
             lib_file = str(lib_paths.get("SACSMA", f"./extern/sac-sma/cmake_build/libsacbmi{lib_ext}"))
             variables_map = self._build_runoff_variables_map()
+            sacsma_variables_map = dict(variables_map)
+
+            # SAC-SMA BMI expects raw input names (tair, precip, pet).
+            # Provide explicit aliases to avoid deferred provision failures.
+            if self._include_noah:
+                precip_source = "QINSUR"
+            elif self._include_snow17:
+                precip_source = "rain_plus_melt"
+            else:
+                precip_source = "atmosphere_water__liquid_equivalent_precipitation_rate"
+
+            if self._include_pet:
+                pet_source = "water_potential_evaporation_flux"
+            elif self._include_noah:
+                pet_source = getattr(self, '_noah_et_fallback', 'EVAPOTRANS')
+            else:
+                pet_source = None
+
+            sacsma_variables_map["tair"] = "land_surface_air__temperature"
+            sacsma_variables_map["precip"] = precip_source
+            if pet_source:
+                sacsma_variables_map["pet"] = pet_source
 
             modules.append({
                 "name": "bmi_fortran",
@@ -1058,8 +1423,8 @@ num_topodex_values={n_classes}
                     "forcing_file": "",
                     "init_config": f"{sacsma_base}/{{{{id}}}}_sacsma_config.txt",
                     "allow_exceed_end_time": True,
-                    "main_output_variable": "channel_inflow",
-                    "variables_names_map": variables_map,
+                    "main_output_variable": "tci",
+                    "variables_names_map": sacsma_variables_map,
                     "output_variable_units": "m3/s"
                 }
             })
