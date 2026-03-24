@@ -1002,10 +1002,15 @@ class NgenParameterManager(BaseParameterManager):
             return False
 
     def _update_sacsma_config(self, params: Dict[str, float]) -> bool:
-        """Update SAC-SMA configuration (key=value text file, direct key match)."""
+        """Update SAC-SMA parameter file (supports `key value` and `key=value`)."""
         try:
             candidates = []
             if getattr(self, "hydro_id", None):
+                candidates = list(self.sacsma_dir.glob(f"cat-{self.hydro_id}_sacsma_parameters.txt"))
+            if not candidates:
+                candidates = list(self.sacsma_dir.glob("cat-*_sacsma_parameters.txt"))
+            if not candidates and getattr(self, "hydro_id", None):
+                # Backward compatibility for legacy single-file config format.
                 candidates = list(self.sacsma_dir.glob(f"cat-{self.hydro_id}_sacsma_config.txt"))
             if not candidates:
                 candidates = list(self.sacsma_dir.glob("*.txt"))
@@ -1019,23 +1024,38 @@ class NgenParameterManager(BaseParameterManager):
             path = candidates[0]
             lines = path.read_text(encoding='utf-8').splitlines()
 
+            norm_params = {str(k).strip().lower(): v for k, v in params.items()}
+
             updated = set()
             for i, line in enumerate(lines):
-                if '=' not in line or line.strip().startswith('#'):
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#') or stripped.startswith('!'):
                     continue
-                k, rhs = line.split('=', 1)
-                k = k.strip()
-                if k in params:
-                    lines[i] = f"{k}={params[k]:.8g}"
-                    updated.add(k)
+
+                if '=' in line:
+                    k, _rhs = line.split('=', 1)
+                    key = k.strip()
+                    delim = '='
+                else:
+                    parts = stripped.split(None, 1)
+                    if len(parts) < 2:
+                        continue
+                    key = parts[0].strip()
+                    delim = ' '
+
+                key_norm = key.lower()
+                if key_norm in norm_params:
+                    value = norm_params[key_norm]
+                    lines[i] = f"{key}{delim}{value:.8g}"
+                    updated.add(key_norm)
 
             for p in params:
-                if p not in updated:
+                if str(p).strip().lower() not in updated:
                     self.logger.warning(f"SAC-SMA parameter {p} not found in {path.name}")
 
             if updated:
                 path.write_text("\n".join(lines) + "\n", encoding='utf-8')
-                self.logger.debug(f"Updated SAC-SMA config with {len(updated)} parameter(s)")
+                self.logger.debug(f"Updated SAC-SMA parameter file with {len(updated)} parameter(s)")
             return True
 
         except Exception as e:  # noqa: BLE001 — calibration resilience
@@ -1043,10 +1063,15 @@ class NgenParameterManager(BaseParameterManager):
             return False
 
     def _update_snow17_config(self, params: Dict[str, float]) -> bool:
-        """Update Snow-17 configuration (key=value text file, direct key match)."""
+        """Update Snow-17 parameter file (supports `key value` and `key=value`)."""
         try:
             candidates = []
             if getattr(self, "hydro_id", None):
+                candidates = list(self.snow17_dir.glob(f"cat-{self.hydro_id}_snow17_parameters.txt"))
+            if not candidates:
+                candidates = list(self.snow17_dir.glob("cat-*_snow17_parameters.txt"))
+            if not candidates and getattr(self, "hydro_id", None):
+                # Backward compatibility for legacy single-file config format.
                 candidates = list(self.snow17_dir.glob(f"cat-{self.hydro_id}_snow17_config.txt"))
             if not candidates:
                 candidates = list(self.snow17_dir.glob("*.txt"))
@@ -1060,23 +1085,38 @@ class NgenParameterManager(BaseParameterManager):
             path = candidates[0]
             lines = path.read_text(encoding='utf-8').splitlines()
 
+            norm_params = {str(k).strip().lower(): v for k, v in params.items()}
+
             updated = set()
             for i, line in enumerate(lines):
-                if '=' not in line or line.strip().startswith('#'):
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#') or stripped.startswith('!'):
                     continue
-                k, rhs = line.split('=', 1)
-                k = k.strip()
-                if k in params:
-                    lines[i] = f"{k}={params[k]:.8g}"
-                    updated.add(k)
+
+                if '=' in line:
+                    k, _rhs = line.split('=', 1)
+                    key = k.strip()
+                    delim = '='
+                else:
+                    parts = stripped.split(None, 1)
+                    if len(parts) < 2:
+                        continue
+                    key = parts[0].strip()
+                    delim = ' '
+
+                key_norm = key.lower()
+                if key_norm in norm_params:
+                    value = norm_params[key_norm]
+                    lines[i] = f"{key}{delim}{value:.8g}"
+                    updated.add(key_norm)
 
             for p in params:
-                if p not in updated:
+                if str(p).strip().lower() not in updated:
                     self.logger.warning(f"Snow-17 parameter {p} not found in {path.name}")
 
             if updated:
                 path.write_text("\n".join(lines) + "\n", encoding='utf-8')
-                self.logger.debug(f"Updated Snow-17 config with {len(updated)} parameter(s)")
+                self.logger.debug(f"Updated Snow-17 parameter file with {len(updated)} parameter(s)")
             return True
 
         except Exception as e:  # noqa: BLE001 — calibration resilience
