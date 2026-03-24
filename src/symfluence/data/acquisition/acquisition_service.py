@@ -756,7 +756,20 @@ class AcquisitionService(ConfigurableMixin):
             additional_obs = []
 
         # Auto-detect observation types based on config flags (matching process_observed_data logic)
-        streamflow_provider = (self._get_config_value(lambda: self.config.data.streamflow_data_provider) or '').upper()
+        streamflow_provider = (
+            self._get_config_value(lambda: self.config.data.streamflow_data_provider)
+            or self._get_config_value(lambda: self.config.evaluation.streamflow.data_provider)
+            or ''
+        )
+        streamflow_provider = str(streamflow_provider).upper()
+
+        download_usgs = (
+            self._get_config_value(lambda: self.config.data.download_usgs_data, default=False)
+            or self._get_config_value(lambda: self.config.evaluation.streamflow.download_usgs, default=False)
+        )
+        if isinstance(download_usgs, str):
+            download_usgs = download_usgs.lower() == 'true'
+
         if streamflow_provider == 'USGS' and 'USGS_STREAMFLOW' not in additional_obs:
             additional_obs.append('USGS_STREAMFLOW')
         elif streamflow_provider == 'WSC' and 'WSC_STREAMFLOW' not in additional_obs:
@@ -765,6 +778,10 @@ class AcquisitionService(ConfigurableMixin):
             additional_obs.append('SMHI_STREAMFLOW')
         elif streamflow_provider == 'LAMAH_ICE' and 'LAMAH_ICE_STREAMFLOW' not in additional_obs:
             additional_obs.append('LAMAH_ICE_STREAMFLOW')
+
+        # If download flags are enabled, include streamflow handlers even when provider is omitted.
+        if download_usgs and 'USGS_STREAMFLOW' not in additional_obs:
+            additional_obs.append('USGS_STREAMFLOW')
 
         # Check for USGS Groundwater download
         download_usgs_gw = self._get_config_value(lambda: self.config.evaluation.usgs_gw.download, default=False, dict_key='DOWNLOAD_USGS_GW')

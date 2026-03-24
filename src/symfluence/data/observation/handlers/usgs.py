@@ -47,9 +47,12 @@ class USGSStreamflowHandler(BaseObservationHandler):
             self.logger.debug("STATION_ID not found, skipping USGS streamflow acquisition")
             return self.project_observations_dir / "streamflow" / "raw_data"
 
-        download_enabled = self._get_config_value(
-            lambda: self.config.data.download_usgs_data, default=False
+        download_enabled = (
+            self._get_config_value(lambda: self.config.data.download_usgs_data, default=False)
+            or self._get_config_value(lambda: self.config.evaluation.streamflow.download_usgs, default=False)
         )
+        if isinstance(download_enabled, str):
+            download_enabled = download_enabled.lower() == 'true'
 
         # Ensure station ID is properly formatted (usually 8+ digits)
         station_id_str = str(station_id)
