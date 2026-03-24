@@ -191,6 +191,7 @@ class WorkflowOrchestrator(ConfigMixin):
                 "GRDC_STREAMFLOW",
             )
             or bool(self.config.data.download_usgs_data)
+            or bool(self.config.evaluation.streamflow.download_usgs)
             or bool(self.config.evaluation.streamflow.download_wsc)
         )
         if check_streamflow:
