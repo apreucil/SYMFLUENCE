@@ -33,7 +33,7 @@ This was NOT enforced in prior versions, causing "End of file" runtime errors.
      - Referenced in NGEN realization JSON
   
   2. cat-{id}_snow17_parameters.txt (SNOWPACK PARAMETERS)
-     - Plain key=value format for snowpack calibration parameters
+      - Plain key value format for snowpack calibration parameters
      - Referenced by snow17_param_file in control namelist
      - Supports multi-HRU format (extensible)
 
@@ -808,7 +808,7 @@ num_topodex_values={n_classes}
            - This is the PRIMARY config file referenced in NGEN's realization JSON
         
         2. **Parameter File** (cat-{id}_snow17_parameters.txt)
-           - Plain text key=value format (hru_id, latitude, elevation, SCF, PXTEMP, etc.)
+              - Plain text key value format (hru_id, latitude, elevation, SCF, PXTEMP, etc.)
            - Contains snowpack parameters and HRU metadata
            - Path referenced via snow17_param_file in the control namelist
            - Multiple HRU support: one row per HRU
@@ -1008,6 +1008,10 @@ num_topodex_values={n_classes}
         control_lines.append("")   # Blank line for readability
 
         config_file = self.setup_dir / "SNOW17" / f"cat-{catchment_id}_snow17_config.txt"
+
+        # Warn when an existing legacy single-file format is present before overwrite.
+        self.detect_and_migrate_snow17_format(config_file)
+
         with open(config_file, 'w', encoding='utf-8') as f:
             f.write("\n".join(control_lines))
 

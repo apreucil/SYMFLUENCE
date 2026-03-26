@@ -429,7 +429,6 @@ class DomainDelineator(PathResolverMixin):
                                 - basins_path: Subset subcatchment polygon shapefile
                                     * Format: {domain_name}_riverBasins_{method_suffix}.shp
                                     * Example: site_riverBasins_semidistributed_subset_merit_basins.shp
-
                                 - rivers_path: Subset river network polyline shapefile
                                     * Format: {domain_name}_riverNetwork_{method_suffix}.shp
                                     * Example: site_riverNetwork_semidistributed_subset_merit_basins.shp
@@ -437,8 +436,8 @@ class DomainDelineator(PathResolverMixin):
         Example:
             >>> config.domain.delineation.geofabric_type = 'merit_basins'
             >>> basins, rivers = delineator._get_subset_paths()
-            >>> # basins: Path('project/domain/shapefiles/river_basins/domain_riverBasins_subset_merit_basins.shp')
-            >>> # rivers: Path('project/domain/shapefiles/river_network/domain_riverNetwork_subset_merit_basins.shp')
+            >>> # basins: Path('project/domain/shapefiles/river_basins/domain_riverBasins_semidistributed_subset_merit_basins.shp')
+            >>> # rivers: Path('project/domain/shapefiles/river_network/domain_riverNetwork_semidistributed_subset_merit_basins.shp')
         """
         method_suffix = self._get_method_suffix()
 

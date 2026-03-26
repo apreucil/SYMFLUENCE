@@ -46,3 +46,36 @@ class TestNgenConfigAdapter:
         }
         with pytest.raises(ConfigValidationError, match="CFE"):
             adapter.validate(config)
+
+    def test_validate_accepts_nested_alias_module_name(self):
+        from symfluence.models.ngen.config import NgenConfigAdapter
+
+        adapter = NgenConfigAdapter()
+        config = {
+            "model": {
+                "ngen": {
+                    "modules_selected": "SLOTH,PET,SAC-SMA",
+                    "modules_to_calibrate": "SAC-SMA",
+                    "sacsma_params_to_calibrate": "UZTWM,UZFWM",
+                }
+            }
+        }
+
+        adapter.validate(config)
+
+    def test_validate_raises_when_calibration_module_not_selected_with_aliases(self):
+        from symfluence.models.ngen.config import NgenConfigAdapter
+
+        adapter = NgenConfigAdapter()
+        config = {
+            "model": {
+                "ngen": {
+                    "modules_selected": "SLOTH,PET,CFE",
+                    "modules_to_calibrate": "NOAH-OWP",
+                    "noah_params_to_calibrate": "REFKDT",
+                }
+            }
+        }
+
+        with pytest.raises(ConfigValidationError, match="NGEN_MODULES_TO_CALIBRATE"):
+            adapter.validate(config)
