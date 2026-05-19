@@ -474,6 +474,7 @@ class ParameterBoundsRegistry:
     # ========================================================================
     SACSMA_PARAMS: Dict[str, ParameterInfo] = {
         # Snow-17 parameters
+        'PXADJ': ParameterInfo(0.5, 1.5, '-', 'Precipitation adjustment factor', 'snow'),
         'SCF': ParameterInfo(0.7, 1.4, '-', 'Snowfall correction factor', 'snow'),
         'PXTEMP': ParameterInfo(-2.0, 2.0, '°C', 'Rain/snow threshold temperature', 'snow'),
         'MFMAX': ParameterInfo(0.5, 2.0, 'mm/°C/6hr', 'Max melt factor (Jun 21)', 'snow'),
@@ -486,6 +487,7 @@ class ParameterBoundsRegistry:
         'DAYGM': ParameterInfo(0.0, 0.3, 'mm/day', 'Daily ground melt', 'snow'),
 
         # SAC-SMA upper zone parameters
+        'PEADJ': ParameterInfo(0.5, 1.5, '-', 'ET-demand adjustment factor', 'et'),
         'UZTWM': ParameterInfo(10.0, 150.0, 'mm', 'Upper zone tension water max', 'soil'),
         'UZFWM': ParameterInfo(1.0, 150.0, 'mm', 'Upper zone free water max', 'soil'),
         'UZK': ParameterInfo(0.15, 0.75, '1/day', 'Upper zone lateral depletion', 'soil'),
@@ -664,6 +666,20 @@ class ParameterBoundsRegistry:
         'watflood_SUBLIM_FACTOR': ParameterInfo(0.0, 0.5, '-', 'Sublimation fraction', 'snow'),
     }
 
+    # ========================================================================
+    # FORCING ADJUSTMENT PARAMETERS
+    # ========================================================================
+    FORCING_ADJUSTMENT_PARAMS: Dict[str, ParameterInfo] = {
+        'PXADJ': ParameterInfo(
+            min=0.5,
+            max=1.5,
+            units='-',
+            description='Precipitation adjustment factor (multiplier)',
+            category='forcing',
+            transform='linear'
+        ),
+    }
+
     def __init__(self):
         """Initialize registry with all parameter categories combined."""
         self._all_params: Dict[str, ParameterInfo] = {}
@@ -687,6 +703,7 @@ class ParameterBoundsRegistry:
         self._all_params.update(self.XINANJIANG_PARAMS)
         self._all_params.update(self.GSFLOW_PARAMS)
         self._all_params.update(self.WATFLOOD_PARAMS)
+        self._all_params.update(self.FORCING_ADJUSTMENT_PARAMS)
 
     def get_bounds(self, param_name: str) -> Optional[Dict]:
         """
@@ -861,6 +878,7 @@ def get_ngen_sacsma_bounds() -> Dict[str, Dict[str, float]]:
         Only SAC-SMA soil moisture accounting params (not Snow-17).
     """
     sacsma_only = [
+        'PXADJ', 'PEADJ',
         'UZTWM', 'UZFWM', 'UZK', 'LZTWM', 'LZFPM', 'LZFSM', 'LZPK', 'LZSK',
         'ZPERC', 'REXP', 'PFREE', 'PCTIM', 'ADIMP', 'RIVA', 'SIDE', 'RSERV',
     ]
@@ -877,9 +895,28 @@ def get_ngen_snow17_bounds() -> Dict[str, Dict[str, float]]:
     return get_snow17_bounds()
 
 
+def get_ngen_forcing_adjustment_bounds() -> Dict[str, Dict[str, float]]:
+    """
+    Get forcing adjustment parameter bounds for NGEN calibration.
+    
+    These parameters modify forcing data in Python before model execution,
+    not passed to Fortran BMI modules.
+    
+    Returns:
+        Dictionary mapping param_name -> {'min': float, 'max': float}
+        
+    Example:
+        >>> bounds = get_ngen_forcing_adjustment_bounds()
+        >>> bounds['PXADJ']
+        {'min': 0.5, 'max': 1.5}
+    """
+    forcing_params = ['PXADJ']
+    return get_registry().get_bounds_for_params(forcing_params)
+
+
 def get_ngen_bounds() -> Dict[str, Dict[str, float]]:
     """
-    Get all NGEN parameter bounds (CFE + NOAH + PET + TOPMODEL + SACSMA + SNOW17).
+    Get all NGEN parameter bounds (CFE + NOAH + PET + TOPMODEL + SACSMA + SNOW17 + FORCING).
 
     Returns:
         Dictionary mapping param_name -> {'min': float, 'max': float}
@@ -891,6 +928,11 @@ def get_ngen_bounds() -> Dict[str, Dict[str, float]]:
     bounds.update(get_ngen_topmodel_bounds())
     bounds.update(get_ngen_sacsma_bounds())
     bounds.update(get_ngen_snow17_bounds())
+    # Add forcing adjustment parameters
+    registry = get_registry()
+    for param_name in ['PXADJ']:
+        if param_name in registry.FORCING_ADJUSTMENT_PARAMS:
+            bounds[param_name] = registry.get_bounds_for_params([param_name])[param_name]
     return bounds
 
 
@@ -1121,9 +1163,9 @@ def get_sacsma_bounds() -> Dict[str, Dict[str, float]]:
     """
     sacsma_params = [
         # Snow-17
-        'SCF', 'PXTEMP', 'MFMAX', 'MFMIN', 'NMF', 'MBASE', 'TIPM', 'UADJ', 'PLWHC', 'DAYGM',
+        'PXADJ', 'SCF', 'PXTEMP', 'MFMAX', 'MFMIN', 'NMF', 'MBASE', 'TIPM', 'UADJ', 'PLWHC', 'DAYGM',
         # SAC-SMA
-        'UZTWM', 'UZFWM', 'UZK', 'LZTWM', 'LZFPM', 'LZFSM', 'LZPK', 'LZSK',
+        'PEADJ', 'UZTWM', 'UZFWM', 'UZK', 'LZTWM', 'LZFPM', 'LZFSM', 'LZPK', 'LZSK',
         'ZPERC', 'REXP', 'PFREE', 'PCTIM', 'ADIMP', 'RIVA', 'SIDE', 'RSERV',
     ]
     return get_registry().get_bounds_for_params(sacsma_params)
@@ -1153,7 +1195,7 @@ def get_snow17_bounds() -> Dict[str, Dict[str, float]]:
     Returns:
         Dictionary mapping Snow-17 param_name -> {'min': float, 'max': float, 'transform': str}
     """
-    names = ['SCF', 'PXTEMP', 'MFMAX', 'MFMIN', 'NMF', 'MBASE', 'TIPM', 'UADJ', 'PLWHC', 'DAYGM']
+    names = ['PXADJ', 'SCF', 'PXTEMP', 'MFMAX', 'MFMIN', 'NMF', 'MBASE', 'TIPM', 'UADJ', 'PLWHC', 'DAYGM']
     return get_registry().get_bounds_for_params(names)
 
 

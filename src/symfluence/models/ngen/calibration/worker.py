@@ -310,6 +310,150 @@ class NgenWorker(BaseWorker):
             self.logger.error(traceback.format_exc())
             return False
 
+    def apply_forcing_adjustments(
+        self,
+        params: Dict[str, float],
+        settings_dir: Path,
+        **kwargs
+    ) -> Optional[Path]:
+        """
+        Apply forcing adjustment parameters (PXADJ) if present.
+        
+        Loads cached base forcing, applies multiplicative adjustments,
+        and writes adjusted forcing to worker-specific directory.
+        
+        Args:
+            params: Parameter dictionary (may contain FORCING.* params)
+            settings_dir: Worker settings directory
+            **kwargs: Additional arguments including 'config'
+            
+        Returns:
+            Path to adjusted forcing file, or None if no adjustments needed
+        """
+        # Extract forcing adjustment parameters (PXADJ)
+        # These may have various module prefixes (SACSMA.PXADJ, FORCING.PXADJ, etc.)
+        forcing_param_names = {'PXADJ'}  # Known forcing adjustment params
+        forcing_params = {}
+        for k, v in params.items():
+            # Strip module prefix to get base param name
+            param_name = k.split('.')[-1] if '.' in k else k
+            if param_name in forcing_param_names:
+                forcing_params[k] = v
+        
+        if not forcing_params:
+            return None
+        
+        try:
+            # Import forcing adjuster
+            from .forcing_adjuster import apply_forcing_adjustments
+            
+            config = kwargs.get('config', self.config)
+            
+            adjusted_path = apply_forcing_adjustments(
+                params, settings_dir, config, self.logger
+            )
+            
+            return adjusted_path
+            
+        except Exception as e:  # noqa: BLE001 — calibration resilience
+            self.logger.error(f"Error applying forcing adjustments: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return None
+
+    def evaluate(self, task: 'WorkerTask') -> 'WorkerResult':
+        """
+        Evaluate a parameter set with forcing adjustment support.
+        
+        Extends base evaluate() to apply forcing adjustments before model run.
+        This is the main entry point for parameter evaluation during calibration.
+        
+        Workflow:
+        1. Apply model parameters (CFE, SACSMA, etc.) → config files
+        2. Apply forcing adjustments (PXADJ) → forcing files
+        3. Run NGEN model
+        4. Calculate metrics
+        
+        Args:
+            task: Worker task containing parameters and settings
+            
+        Returns:
+            Worker result with metrics and success status
+        """
+        from symfluence.optimization.workers.base_worker import WorkerTask, WorkerResult
+        
+        # Extract task components
+        params = task.params
+        settings_dir = task.settings_dir
+        output_dir = task.output_dir
+        
+        try:
+            # Step 1: Apply model parameters
+            self.logger.debug(f"Applying {len(params)} parameters to {settings_dir}")
+            success = self.apply_parameters(params, settings_dir, config=self.config)
+            if not success:
+                return self._create_failure_result(task, "Parameter application failed")
+            
+            # Step 2: Apply forcing adjustments (if FORCING.* params present)
+            adjusted_forcing = self.apply_forcing_adjustments(
+                params, settings_dir, config=self.config
+            )
+            if adjusted_forcing:
+                self.logger.debug(f"Using adjusted forcing: {adjusted_forcing}")
+            else:
+                self.logger.debug("No forcing adjustments (no FORCING.* parameters)")
+            
+            # Step 3: Run model
+            self.logger.debug(f"Running NGEN model with output to {output_dir}")
+            success = self.run_model(self.config, settings_dir, output_dir)
+            if not success:
+                return self._create_failure_result(task, "Model run failed")
+            
+            # Step 4: Calculate metrics
+            metrics = self.calculate_metrics(output_dir, self.config)
+            
+            # Extract primary metric
+            primary_metric_name = self._cfg('CALIBRATION_METRIC', 'KGE').lower()
+            primary_metric = metrics.get(primary_metric_name, self.penalty_score)
+            
+            self.logger.info(
+                f"Evaluation complete: {primary_metric_name}={primary_metric:.4f}"
+            )
+            
+            return WorkerResult(
+                individual_id=task.individual_id,
+                params=task.params,
+                score=primary_metric,
+                metrics=metrics
+            )
+            
+        except Exception as e:  # noqa: BLE001 — calibration resilience
+            self.logger.error(f"Error in worker evaluation: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return self._create_failure_result(task, str(e))
+
+    def _create_failure_result(self, task: 'WorkerTask', reason: str) -> 'WorkerResult':
+        """
+        Create a failure result.
+        
+        Args:
+            task: Worker task for extracting individual_id and params
+            reason: Failure reason string
+            
+        Returns:
+            WorkerResult with penalty score
+        """
+        from symfluence.optimization.workers.base_worker import WorkerResult
+        
+        return WorkerResult(
+            individual_id=task.individual_id,
+            params=task.params,
+            score=self.penalty_score,
+            metrics={'kge': self.penalty_score},
+            error=reason
+        )
+
     def run_model(
         self,
         config: Dict[str, Any],

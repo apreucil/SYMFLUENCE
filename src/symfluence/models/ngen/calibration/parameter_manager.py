@@ -198,6 +198,15 @@ class NgenParameterManager(BaseParameterManager):
 
         for module, params in self.params_to_calibrate.items():
             for param in params:
+                # If workflow contains SNOW17 and SACSMA
+                # Only SNOW17.PXADJ should be altered. SACSMA.PXADJ to be skipped.
+                if 'SNOW17' in self.modules_to_calibrate and module == 'SACSMA' and param == 'PXADJ':
+                    self.logger.warning(
+                        "Skipping SACSMA.PXADJ - Snow-17 handles precipitation adjustment "
+                        "when both modules are active"
+                    )
+                    continue
+
                 full_param_name = f"{module}.{param}"
                 if param in base_bounds:
                     bounds[full_param_name] = base_bounds[param]
@@ -285,6 +294,15 @@ class NgenParameterManager(BaseParameterManager):
                 snow17_params_str = 'SCF,MFMAX,MFMIN,TIPM,PLWHC'
             params['SNOW17'] = [p.strip() for p in snow17_params_str.split(',') if p.strip()]
 
+        # Forcing adjustment parameters (always available, not module-specific)
+        forcing_params_str = self._get_config_value(
+            lambda: self.config.model.ngen.forcing_adjustment_params_to_calibrate,
+            default='',
+            dict_key='NGEN_FORCING_ADJUSTMENT_PARAMS_TO_CALIBRATE'
+        )
+        if forcing_params_str:
+            params['FORCING'] = [p.strip() for p in forcing_params_str.split(',') if p.strip()]
+
         return params
 
     # Note: Parameter bounds are now provided by the central ParameterBoundsRegistry
@@ -359,9 +377,26 @@ class NgenParameterManager(BaseParameterManager):
             True if successful, False otherwise
         """
         try:
+            # ========================================================================
+            # NEW: Filter out forcing adjustment parameters
+            # ========================================================================
+            forcing_params = {k: v for k, v in params.items() if k.startswith('FORCING.')}
+            model_params = {k: v for k, v in params.items() if not k.startswith('FORCING.')}
+            
+            if forcing_params:
+                self.logger.debug(
+                    f"Filtering {len(forcing_params)} forcing adjustment params "
+                    f"(handled by NgenForcingAdjuster): {list(forcing_params.keys())}"
+                )
+            
+            if not model_params:
+                self.logger.debug("No model parameters to update (only forcing adjustments)")
+                return True
+            # ========================================================================
+            
             # Group parameters by module
             module_params: Dict[str, Dict[str, float]] = {}
-            for param_name, value in params.items():
+            for param_name, value in model_params.items():
                 if '.' in param_name:
                     module, param = param_name.split('.', 1)
                     if module not in module_params:

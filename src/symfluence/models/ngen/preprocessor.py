@@ -783,6 +783,46 @@ class NgenPreProcessor(BaseModelPreProcessor):  # type: ignore[misc]
                 self.logger.info(f"Added {len(padding_times)} padding timesteps in lookahead buffer")
 
         ngen_ds = self._create_ngen_forcing_dataset(forcing_data, catchment_ids)
+        
+        # ========================================================================
+        # NEW: Cache base forcing for calibration
+        # ========================================================================
+        cache_forcing = self._get_config_value(
+            lambda: self.config.model.ngen.cache_base_forcing,
+            default=True,
+            dict_key='NGEN_CACHE_BASE_FORCING'
+        )
+        
+        if cache_forcing:
+            from datetime import datetime
+            cache_dir = self.project_dir / "cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            base_forcing_path = cache_dir / "forcing_base.nc"
+            
+            self.logger.info(f"Caching base forcing to {base_forcing_path}")
+            ngen_ds.to_netcdf(base_forcing_path, format='NETCDF4')
+            
+            # Also cache metadata for reconstruction
+            cache_meta = cache_dir / "forcing_cache_metadata.json"
+            metadata = {
+                'catchment_ids': catchment_ids,
+                'time_start': str(ngen_ds.time.values[0]),
+                'time_end': str(ngen_ds.time.values[-1]),
+                'n_timesteps': len(ngen_ds.time),
+                'variables': list(ngen_ds.data_vars.keys()),
+                'created': datetime.now().isoformat(),
+                'created_by': 'NgenPreProcessor.prepare_forcing_data()',
+            }
+            with cache_meta.open('w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            self.logger.debug(
+                f"Cached forcing: {len(catchment_ids)} catchments, "
+                f"{len(ngen_ds.time)} timesteps, "
+                f"{len(ngen_ds.data_vars)} variables"
+            )
+        # ========================================================================
+        
         output_file = self.forcing_dir / "forcing.nc"
         # Ensure parent directory exists before saving
         output_file.parent.mkdir(parents=True, exist_ok=True)

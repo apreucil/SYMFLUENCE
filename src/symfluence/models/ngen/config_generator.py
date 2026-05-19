@@ -642,6 +642,8 @@ num_topodex_values={n_classes}
             Path to generated config file
         """
         params = {
+            # Adjustment factors
+            'PEADJ': 1.0,     # ET-demand adjustment factor [-]
             # Upper zone
             'UZTWM': 50.0,    # Upper zone tension water max [mm]
             'UZFWM': 40.0,    # Upper zone free water max [mm]
@@ -663,6 +665,11 @@ num_topodex_values={n_classes}
             'SIDE': 0.0,      # Deep recharge fraction [-]
             'RSERV': 0.3,     # Lower zone free water reserve fraction [-]
         }
+
+        # Snow-17 is not active, include PXADJ
+        if not self._include_snow17:
+            params['PXADJ'] = 1.0  # Precipitation adjustment factor [-]
+
         params.update(overrides)
 
         sacsma_dir = self.setup_dir / "SACSMA"
@@ -741,6 +748,7 @@ num_topodex_values={n_classes}
                     break
 
         params = {
+            'PXADJ': 1.0,     # Precipitation adjustment factor [-]
             'SCF': 1.0,       # Snowfall correction factor [-]
             'PXTEMP': 1.0,    # Rain/snow threshold [°C]
             'MFMAX': 1.0,     # Max melt factor [mm/°C/6hr]
